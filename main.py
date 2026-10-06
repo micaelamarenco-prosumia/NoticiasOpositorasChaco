@@ -62,6 +62,10 @@ PORTALES = [
      "url": "https://www.facebook.com/roberto.espinoza.75",
      "feed": "https://rss.app/feeds/hDgdQR5V3CDhnFLN.xml",
      "solo_rss": True, "cada": 300, "titulo_desde_texto": True},
+    {"nombre": "Qué Hay de Cierto (Facebook)", "dominio": "facebook.com",
+     "url": "https://www.facebook.com/QueHayDeCiertoNoticias",
+     "feed": "https://rss.app/feeds/AB35fY3uimrPZGxy.xml",
+     "solo_rss": True, "cada": 300, "titulo_desde_texto": True},
 ]
 # Si algún portal tiene un RSS conocido, se puede fijar así:
 #   {"nombre": "...", "dominio": "...", "url": "...", "feed": "https://.../feed/"}
