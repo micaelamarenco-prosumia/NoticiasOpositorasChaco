@@ -277,12 +277,16 @@ SEGMENTOS_NO_NOTA = {
     "politica-de-privacidad", "terminos-y-condiciones", "staff", "publicidad",
 }
 
+def mismo_sitio(host, dominios):
+    host = host.lower().removeprefix("www.")
+    return any(host == d or host.endswith("." + d) for d in dominios)
+
 def parece_nota(url, dominio):
+    dominios = dominio if isinstance(dominio, (set, list, tuple)) else {dominio}
     p = urlparse(url)
     if p.scheme not in ("http", "https"):
         return False
-    host = p.netloc.lower().removeprefix("www.")
-    if host != dominio:
+    if not mismo_sitio(p.netloc, dominios):
         return False
     path = p.path.strip("/")
     if not path:
@@ -293,7 +297,7 @@ def parece_nota(url, dominio):
     if any(s in SEGMENTOS_NO_NOTA for s in segs):
         return False
     mas_largo = max(segs, key=len)
-    if mas_largo.count("-") >= 3:          # slug tipo "zdero-anuncio-el-pago"
+    if mas_largo.count("-") >= 2:          # slug tipo "zdero-anuncio-pago"
         return True
     if re.search(r"\d{4,}", path) and len(path) > 12:  # notas con ID numérico
         return True
@@ -301,18 +305,43 @@ def parece_nota(url, dominio):
 
 def leer_portada(portal):
     r = bajar(portal["url"])
+    final = str(r.url or portal["url"])
+    dominios = {portal["dominio"], urlparse(final).netloc.lower().removeprefix("www.")}
     soup = BeautifulSoup(r.text, "html.parser")
+    enlaces = soup.find_all("a", href=True)
     textos = {}
-    for a in soup.find_all("a", href=True):
-        url = urljoin(portal["url"], a["href"]).split("#")[0]
-        if not parece_nota(url, portal["dominio"]):
+    for a in enlaces:
+        url = urljoin(final, a["href"]).split("#")[0]
+        if not parece_nota(url, dominios):
             continue
         t = a.get_text(" ", strip=True) or a.get("title", "")
         if len(t) > len(textos.get(url, "")):
             textos[url] = t
     items = [{"link": u, "titulo": t, "verificar_titulo": True} for u, t in textos.items()]
     if not items:
-        raise ValueError("no encontré notas en la portada")
+        muestra = list(dict.fromkeys(a["href"] for a in enlaces))[:15]
+        log.info(f"{portal['nombre']} | DIAGNÓSTICO portada: url final {final} | "
+                 f"código {r.status_code} | {len(r.text)} caracteres | {len(enlaces)} links | "
+                 f"muestra: {muestra}")
+        raise ValueError(f"no encontré notas en la portada ({len(enlaces)} links, "
+                         f"{len(r.text)} caracteres, url final {final})")
+    return items
+
+# ============================================================
+# LECTURA: API DE WORDPRESS (por si el sitio es WordPress sin RSS)
+# ============================================================
+def leer_wp_api(portal):
+    base = portal["url"].rstrip("/")
+    r = bajar(base + "/wp-json/wp/v2/posts?per_page=30&_fields=link,title")
+    datos = r.json()
+    items = []
+    for p in datos if isinstance(datos, list) else []:
+        link = p.get("link")
+        titulo = limpiar((p.get("title") or {}).get("rendered", ""))
+        if link and titulo:
+            items.append({"link": link, "titulo": titulo})
+    if not items:
+        raise ValueError("la API de WordPress no devolvió notas")
     return items
 
 # ============================================================
@@ -385,6 +414,17 @@ def revisar(portal):
             items, via = leer_rss(st["feed"], portal.get("titulo_desde_texto", False)), "rss"
         except Exception as e:
             errores.append(f"rss: {e}")
+
+    # 1b) API de WordPress
+    if items is None and not portal.get("solo_rss") and st.get("wp_api", True):
+        try:
+            items, via = leer_wp_api(portal), "wp-api"
+            st["wp_api_fallas"] = 0
+        except Exception as e:
+            errores.append(f"wp-api: {e}")
+            st["wp_api_fallas"] = st.get("wp_api_fallas", 0) + 1
+            if st["wp_api_fallas"] >= 3:   # si no es WordPress, deja de intentarlo
+                st["wp_api"] = False
 
     # 2) Portada
     if items is None and not portal.get("solo_rss"):
